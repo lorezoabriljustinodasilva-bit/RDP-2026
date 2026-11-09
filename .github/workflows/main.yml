@@ -1,0 +1,83 @@
+
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-2025
+    timeout-minutes: 30
+
+    steps:
+      - name: Configure RDP - SKYRO
+        shell: pwsh
+        env:
+          RDP_PASSWORD: ${{ secrets.RDP_PASSWORD }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Verificar senha configurada no GitHub
+          if ([string]::IsNullOrWhiteSpace($env:RDP_PASSWORD)) {
+              throw "Configure o segredo RDP_PASSWORD no GitHub."
+          }
+
+          # Ativar Área de Trabalho Remota
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" `
+            -Name "fDenyTSConnections" `
+            -Value 0
+
+          # Manter NLA ativado
+          Set-ItemProperty `
+            -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
+            -Name "UserAuthentication" `
+            -Value 1
+
+          # Criar ou atualizar usuário Skyro
+          $Password = ConvertTo-SecureString `
+            $env:RDP_PASSWORD -AsPlainText -Force
+
+          $User = Get-LocalUser -Name "Skyro" `
+            -ErrorAction SilentlyContinue
+
+          if ($null -eq $User) {
+              New-LocalUser `
+                -Name "Skyro" `
+                -Password $Password `
+                -Description "Usuario RDP"
+          } else {
+              Set-LocalUser `
+                -Name "Skyro" `
+                -Password $Password
+          }
+
+          # Adicionar ao grupo de acesso remoto
+          $RDPGroup = Get-LocalGroup -SID "S-1-5-32-555"
+
+          $Members = Get-LocalGroupMember -Group $RDPGroup.Name
+
+          if (-not ($Members | Where-Object {
+              $_.Name -like "*\Skyro"
+          })) {
+              Add-LocalGroupMember `
+                -Group $RDPGroup.Name `
+                -Member "Skyro"
+          }
+
+          # Ativar regra TCP padrão do RDP
+          Enable-NetFirewallRule `
+            -Name "RemoteDesktop-UserMode-In-TCP"
+
+          # Iniciar serviço RDP
+          $Service = Get-Service -Name TermService
+
+          if ($Service.Status -ne "Running") {
+              Start-Service -Name TermService
+          }
+
+          Write-Host "RDP configurado!"
+          Write-Host "Usuario: Skyro"
+          Write-Host "Porta: 3389"
+          Write-Host "NLA: Ativado"
+          
